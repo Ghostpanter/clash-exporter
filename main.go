@@ -7,18 +7,24 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/Ghostpanter/clash-exporter/collector"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/zxh326/clash-exporter/collector"
 )
 
-var collectDest bool
-var CollectTracing bool
-var port int
+var version = "dev"
+
+var (
+	collectDest    bool
+	collectTracing bool
+	port           int
+	listenAddr     string
+)
 
 func init() {
-	flag.BoolVar(&collectDest, "collectDest", true, "enable collector dest\nWarning: if collector destination enabled, will generate a large number of metrics, which may put a lot of pressure on Prometheus.")
-	flag.BoolVar(&CollectTracing, "collectTracing", false, "enable collector tracing. \nIt must be the Clash premium version, and the profile.tracing must be enabled in the Clash configuration file.")
-	flag.IntVar(&port, "port", 2112, "port to listen on")
+	flag.BoolVar(&collectDest, "collectDest", false, "label traffic by destination host.\nWarning: this creates one series per destination and can overwhelm Prometheus. Leave off on a router.")
+	flag.BoolVar(&collectTracing, "collectTracing", false, "collect /profile/tracing.\nCurrent Mihomo builds used by OpenClash no longer expose this endpoint; the collector stops itself when the core returns 404.")
+	flag.IntVar(&port, "port", 2112, "port to listen on. Ignored when -listen is set")
+	flag.StringVar(&listenAddr, "listen", "", "address to listen on, for example 0.0.0.0:2112. Overrides -port")
 }
 
 func getEnvOrDefault(key string, defaultValue string) string {
@@ -31,16 +37,21 @@ func getEnvOrDefault(key string, defaultValue string) string {
 func main() {
 	flag.Parse()
 
+	addr := listenAddr
+	if addr == "" {
+		addr = fmt.Sprintf(":%d", port)
+	}
+
 	config := collector.CollectConfig{
 		CollectDest:    collectDest,
-		CollectTracing: CollectTracing,
+		CollectTracing: collectTracing,
 		ClashHost:      getEnvOrDefault("CLASH_HOST", "127.0.0.1:9090"),
 		ClashToken:     getEnvOrDefault("CLASH_TOKEN", ""),
 	}
 	http.Handle("/metrics", promhttp.Handler())
-	log.Println("Listening on :", port)
+	log.Printf("clash-exporter %s listening on %s, controller %s, collectDest=%v collectTracing=%v", version, addr, config.ClashHost, collectDest, collectTracing)
 
 	go collector.Start(config)
 
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", port), nil))
+	log.Fatal(http.ListenAndServe(addr, nil))
 }

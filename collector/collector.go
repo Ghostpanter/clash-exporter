@@ -38,7 +38,7 @@ func Start(config CollectConfig) {
 				if err := c.Collect(config); err != nil {
 					retryCount++
 					sleepDuration := time.Duration(min(retryCount*10, 60)) * time.Second
-					log.Println("collector:", c.Name(), "failed error: ", err, "retry after", sleepDuration)
+					log.Println("collector:", c.Name(), "failed error:", err, "retry after", sleepDuration)
 					time.Sleep(sleepDuration)
 				} else {
 					return

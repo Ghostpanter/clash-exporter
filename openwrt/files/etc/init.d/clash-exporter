@@ -1,0 +1,76 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+USE_PROCD=1
+PROG=/usr/bin/clash-exporter
+
+secret_from_yaml() {
+	local f="$1" line
+	[ -f "$f" ] || return 1
+	line=$(sed -n 's/^secret:[[:space:]]*//p' "$f" | head -n 1)
+	line=$(printf '%s' "$line" | tr -d '\r')
+	case "$line" in
+		\"*\") line=${line#\"}; line=${line%\"} ;;
+		\'*\') line=${line#\'}; line=${line%\'} ;;
+	esac
+	printf '%s\n' "$line"
+}
+
+start_service() {
+	local enabled listen host port token dest tracing autoconf
+	local oc_port oc_token cfg dest_flag tracing_flag
+
+	enabled="$(uci -q get clash-exporter.main.enabled)"
+	[ "$enabled" = "1" ] || return 0
+
+	listen="$(uci -q get clash-exporter.main.listen)"
+	[ -n "$listen" ] || listen="0.0.0.0:2112"
+	host="$(uci -q get clash-exporter.main.clash_host)"
+	[ -n "$host" ] || host="127.0.0.1"
+	port="$(uci -q get clash-exporter.main.clash_port)"
+	token="$(uci -q get clash-exporter.main.clash_token)"
+	dest="$(uci -q get clash-exporter.main.collect_dest)"
+	tracing="$(uci -q get clash-exporter.main.collect_tracing)"
+	autoconf="$(uci -q get clash-exporter.main.openclash_autoconf)"
+	[ -n "$dest" ] || dest=0
+	[ -n "$tracing" ] || tracing=0
+
+	if [ "$autoconf" != "0" ]; then
+		oc_port="$(uci -q get openclash.config.cn_port)"
+		[ -n "$oc_port" ] && port="$oc_port"
+		oc_token="$(uci -q get openclash.config.dashboard_password)"
+		if [ -z "$oc_token" ]; then
+			cfg="$(uci -q get openclash.config.config_path)"
+			if [ -n "$cfg" ]; then
+				case "$cfg" in
+					/*) ;;
+					*) cfg="/etc/openclash/$cfg" ;;
+				esac
+				oc_token="$(secret_from_yaml "$cfg" || true)"
+			fi
+		fi
+		[ -n "$oc_token" ] && token="$oc_token"
+		host="127.0.0.1"
+	fi
+	[ -n "$port" ] || port=9090
+
+	dest_flag=false
+	tracing_flag=false
+	[ "$dest" = "1" ] && dest_flag=true
+	[ "$tracing" = "1" ] && tracing_flag=true
+
+	procd_open_instance
+	procd_set_param command "$PROG" \
+		-listen "$listen" \
+		-collectDest="$dest_flag" \
+		-collectTracing="$tracing_flag"
+	procd_set_param env "CLASH_HOST=${host}:${port}" "CLASH_TOKEN=${token}"
+	procd_set_param respawn 3600 5 5
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+service_triggers() {
+	procd_add_reload_trigger "clash-exporter" "openclash"
+}

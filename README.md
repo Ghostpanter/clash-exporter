@@ -1,106 +1,72 @@
-## Clash Exporter
+# clash-exporter
 
-This is an exporter for Clash, for used by the [Prometheus](https://prometheus.io/) to monitor clash network traffic.
+Prometheus exporter for **OpenClash / Mihomo**（也兼容旧版 Clash 的 external controller）。
 
-<table>
-<tr>
-<td>
-<img src='https://user-images.githubusercontent.com/21299255/237983272-46fa121e-3395-4e12-919a-52bc73e90ec0.png' />
-</td>
-<td>
-<img src='https://user-images.githubusercontent.com/21299255/237983285-0363e138-bd76-4e3b-a4a9-dcf3e92a182b.png' />
-</td>
-</tr>
-</table>
+Fork 自 [zxh326/clash-exporter](https://github.com/zxh326/clash-exporter)，按当前 Mihomo（OpenClash 正在用的内核）改过：
 
-### Usage
+- `/version` 认 `meta: true`。原仪表盘的 `premium` 标签在 Mihomo 上也会是 `true`，Grafana 面板 [18530](https://grafana.com/grafana/dashboards/18530-clash-dashboard/) 不用改。
+- 连接流量用 `int64`。原来的 `int` 在 32 位 OpenWrt 上会溢出。
+- `chains` 为空不再崩。策略标签取 Mihomo 的实际出口（`chains[0]`）。
+- 目的地优先用嗅探域名 `sniffHost`。
+- 计数器只加非负增量，核心重启把连接计数清掉时不会把 Counter 减成负数。
+- WebSocket 用 `Authorization: Bearer`，密钥里有特殊字符也能过。
+- 新增 `clash_memory_bytes`、`clash_mode`。
+- 当前 Mihomo 已经去掉 `/profile/tracing`。`-collectTracing` 打开后如果内核返回 404，这个采集器会自己停掉，不再把进程打死。
+- 路由器上默认**不**按目的地拆指标（`-collectDest` 默认 `false`）。
 
-#### run in command
+## OpenWrt / OpenClash
 
-Go to https://github.com/zxh326/clash-exporter/releases download latest release binary file
+仓库里的 [openwrt/Makefile](openwrt/Makefile) 是给 ImmortalWrt / OpenWrt 编译用的包。装上之后：
 
-```sh
-➜  ./clash-exporter -h
-Usage of ./clash-exporter:
-  -collectDest
-        enable collector dest
-        Warning: if collector destination enabled, will generate a large number of metrics, which may put a lot of pressure on Prometheus. (default true)
-  -collectTracing
-        enable collector tracing.
-        It must be the Clash premium version, and the profile.tracing must be enabled in the Clash configuration file. (default false)
-  -port int
-        port to listen on (default 2112)
+- 监听 `0.0.0.0:2112`，防火墙默认挡住 WAN。抓取地址：`http://路由器:2112/metrics`
+- `openclash_autoconf=1`（默认）时，从 UCI `openclash.config.cn_port` 和 `openclash.config.dashboard_password` 读控制器。密码为空就再看运行中的配置文件里的 `secret:`。
+- 连接地址固定是 `127.0.0.1`，因为 OpenClash 的 `external-controller` 经常写成 `0.0.0.0:9090`，不能拿来当客户端地址。
+
+```
+/etc/init.d/clash-exporter enable
+/etc/init.d/clash-exporter restart
 ```
 
-#### deploy with docker compose
+要按目的地统计：
 
-```sh
-git clone https://github.com/zxh326/clash-exporter
-
-# check docker-compose.yml and update environment
-cat docker-compose.yml
-docker compose up -d
+```
+uci set clash-exporter.main.collect_dest='1'
+uci commit clash-exporter
+/etc/init.d/clash-exporter restart
 ```
 
+OpenClash 改了面板端口或密码之后，这个服务会跟着 reload（`procd` 监听了 `openclash` 的配置）。
 
-- visit `localhost:2112/metrics` to check metrics
-- visit `localhost:3000` [add prometheus data source first](https://grafana.com/docs/grafana/latest/administration/data-source-management/)
-- visit `localhost:3000` and import [example dashboard](./grafana/dashboard.json) or via id `18530`
+## 命令行
 
-> tips: grafana default username / password is admin/admin
+```
+./clash-exporter -h
+./clash-exporter -listen 0.0.0.0:2112 -collectDest=false
+```
 
-### Prometheus Example Config
+环境变量：`CLASH_HOST`（默认 `127.0.0.1:9090`）、`CLASH_TOKEN`。
+
+## 指标
+
+| 名字 | 类型 | 标签 |
+| --- | --- | --- |
+| clash_info | Gauge | version, premium |
+| clash_download_bytes_total | Gauge | |
+| clash_upload_bytes_total | Gauge | |
+| clash_active_connections | Gauge | |
+| clash_network_traffic_bytes_total | Counter | source, destination, policy, type |
+| clash_memory_bytes | Gauge | type=inuse, oslimit |
+| clash_mode | Gauge | mode |
+| clash_tracing_* | Histogram | 仅当内核还提供 /profile/tracing |
+
+Prometheus：
 
 ```yaml
-- job_name: "clash"
+- job_name: clash
   metrics_path: /metrics
-  scrape_interval: 1s
+  scrape_interval: 15s
   static_configs:
-    - targets: ["127.0.0.1:2112"]
+    - targets: ["192.168.1.1:2112"]
 ```
 
-#### Record Rule Config
-
-```
-groups:
-  - name: discard_destination
-    rules:
-      - record: source_policy_type:clash_network_traffic_bytes_total:sum
-        expr: sum without (destination, job) (clash_network_traffic_bytes_total)
-```
-
-### Grafana Example Dashboard
-
-- You can import [clash-dashboard.json](./grafana/dashboard.json) to obtain the example effect, or you can create one yourself based on the following metrics introduction.
-
-- or Import via [grafana.com](https://grafana.com/grafana/dashboards/18530-clash-dashboard/) with id `18530`
-
-### Metrics
-
-| Metric name                                     | Metric type | Labels                                                              |
-| ----------------------------------------------- | ----------- | ------------------------------------------------------------------- |
-| clash_info                                      | Gauge       | `version`, `premium`                                                |
-| clash_download_bytes_total                      | Gauge       |                                                                     |
-| clash_upload_bytes_total                        | Gauge       |                                                                     |
-| clash_active_connections                        | Gauge       |                                                                     |
-| clash_network_traffic_bytes_total               | Counter     | `source`,`destination(if enabled)`,`policy`,`type(download,upload)` |
-| clash_tracing_rule_match_duration_milliseconds  | Histogram   |                                                                     |
-| clash_tracing_dns_request_duration_milliseconds | Histogram   | `type(dnsType)`                                                     |
-| clash_tracing_proxy_dial_duration_milliseconds  | Histogram   | `policy`                                                            |
-
-### FAQ
-
-- tracing metrics is empty
-
-  - Required clash premium version
-  - Follow [clash profile docs](https://github.com/Dreamacro/clash/wiki/Clash-Premium-Features#tracing) enable profile tracing
-  - Add `-collectTracing=true` flag in clash-exporter start script
-
-- high Prometheus Memory
-
-  This may be caused by the default enable of collector destination traffic, which can generate a large number of metrics. Try use `-collectDest=false` disable it.
-
-### TODO
-
-- [x] dns query metrics
-- [x] proxy dial metrics
+`scrape_interval` 不要用原来的 1 秒。流量来自 `/connections` 的推送，1 秒抓一次只会放大 Prometheus 的压力。

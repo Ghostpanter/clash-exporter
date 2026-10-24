@@ -2,25 +2,24 @@ package collector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 
-	"github.com/pkg/errors"
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 	"github.com/prometheus/client_golang/prometheus"
-	"nhooyr.io/websocket"
-	"nhooyr.io/websocket/wsjson"
 )
 
 var (
 	dnsReqDuration    *prometheus.HistogramVec
-	ruleMatchDuration *prometheus.HistogramVec
+	ruleMatchDuration prometheus.Histogram
 	proxyDialDuration *prometheus.HistogramVec
 )
 
 type tracingMessage struct {
 	Duration int      `json:"duration"`
-	ID       string   `json:"id"`
 	Metadata Metadata `json:"metadata"`
 	Payload  string   `json:"payload"`
 	Proxy    string   `json:"proxy"`
@@ -29,89 +28,67 @@ type tracingMessage struct {
 	DnsType  string   `json:"dnsType"`
 }
 
-type Tracing struct {
-}
+type Tracing struct{}
 
-func (t *Tracing) Name() string {
-	return "tracing"
-}
+func (*Tracing) Name() string { return "tracing" }
 
-func (t *Tracing) Collect(config CollectConfig) error {
+func (*Tracing) Collect(config CollectConfig) error {
 	if !config.CollectTracing {
 		return nil
 	}
-	log.Println("starting collector:", t.Name())
+	log.Println("starting collector:", "tracing")
 	ctx := context.Background()
-	endpoint := fmt.Sprintf("ws://%s/profile/tracing", config.ClashHost)
-	if config.ClashToken != "" {
-		endpoint = fmt.Sprintf("%s?token=%s", endpoint, config.ClashToken)
-	}
-	conn, resp, err := websocket.Dial(ctx, endpoint, nil)
+	conn, resp, err := dialWS(ctx, config, "/profile/tracing")
 	if err != nil {
-		if resp.StatusCode == http.StatusNotFound {
-			log.Fatal("profile tracing is not enabled in Clash, please enable it first, or use `-collectTracing=false` disable this collector. \nFYI: https://github.com/Dreamacro/clash/wiki/Clash-Premium-Features#tracing")
+		if resp != nil && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest) {
+			log.Println("collector: tracing stopped: this Mihomo/OpenClash core does not expose /profile/tracing")
+			return nil
 		}
-		log.Fatal("tracing: failed to dial: ", err)
+		return fmt.Errorf("dial /profile/tracing: %w", err)
 	}
-
-	conn.SetReadLimit(1024 * 1024)
-
-	defer conn.Close(websocket.StatusInternalError, "the sky is falling")
+	defer conn.Close(websocket.StatusInternalError, "reconnect")
 
 	for {
 		var m tracingMessage
-		err = wsjson.Read(ctx, conn, &m)
-		if err != nil {
-			return errors.Wrap(err, "failed to read JSON message")
+		if err := wsjson.Read(ctx, conn, &m); err != nil {
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			return fmt.Errorf("read /profile/tracing: %w", err)
 		}
 		switch m.Type {
 		case "RuleMatch":
-			ruleMatchDuration.WithLabelValues().Observe(float64(m.Duration) / 1000)
+			ruleMatchDuration.Observe(float64(m.Duration) / 1000)
 		case "DNSRequest":
 			dnsReqDuration.WithLabelValues(m.DnsType).Observe(float64(m.Duration) / 1000)
 		case "ProxyDial":
 			proxyDialDuration.WithLabelValues(m.Proxy).Observe(float64(m.Duration) / 1000)
 		}
 	}
-
 }
 
 func init() {
-	dnsReqDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "clash",
-			Subsystem: "tracing",
-			Name:      "dns_request_duration_milliseconds",
-			Help:      "DNS request duration in milliseconds",
-			Buckets:   []float64{1, 5, 10, 25, 50, 75, 100, 250, 500}, // 1ms ~ 500ms
-		},
-		[]string{"type"},
-	)
-
-	ruleMatchDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "clash",
-			Subsystem: "tracing",
-			Name:      "rule_match_duration_milliseconds",
-			Help:      "Rule match duration in milliseconds",
-			Buckets:   []float64{1, 5, 10, 25, 50, 75, 100, 250, 500}, // 1ms ~ 500ms
-		},
-		[]string{},
-	)
-
-	proxyDialDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "clash",
-			Subsystem: "tracing",
-			Name:      "proxy_dial_duration_milliseconds",
-			Help:      "Proxy dial duration in milliseconds",
-			Buckets:   []float64{1, 10, 50, 100, 250, 500, 1000, 2500, 5000}, // 1ms ~ 5s
-		},
-		[]string{"policy"},
-	)
-
+	dnsReqDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "clash",
+		Subsystem: "tracing",
+		Name:      "dns_request_duration_milliseconds",
+		Help:      "DNS request duration in milliseconds",
+		Buckets:   []float64{1, 5, 10, 25, 50, 75, 100, 250, 500},
+	}, []string{"type"})
+	ruleMatchDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "clash",
+		Subsystem: "tracing",
+		Name:      "rule_match_duration_milliseconds",
+		Help:      "Rule match duration in milliseconds",
+		Buckets:   []float64{1, 5, 10, 25, 50, 75, 100, 250, 500},
+	})
+	proxyDialDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "clash",
+		Subsystem: "tracing",
+		Name:      "proxy_dial_duration_milliseconds",
+		Help:      "Proxy dial duration in milliseconds",
+		Buckets:   []float64{1, 10, 50, 100, 250, 500, 1000, 2500, 5000},
+	}, []string{"policy"})
 	prometheus.MustRegister(dnsReqDuration, ruleMatchDuration, proxyDialDuration)
-
-	t := &Tracing{}
-	Register(t)
+	Register(new(Tracing))
 }

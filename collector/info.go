@@ -5,69 +5,67 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 type Info struct{}
 
-var (
-	clashInfo *prometheus.GaugeVec
-)
+var clashInfo *prometheus.GaugeVec
 
-func (*Info) Name() string {
-	return "info"
-}
+func (*Info) Name() string { return "info" }
 
 type versionMessage struct {
 	Version string `json:"version"`
 	Premium bool   `json:"premium"`
+	Meta    bool   `json:"meta"`
 }
 
 func (*Info) Collect(config CollectConfig) error {
-	endpoint := fmt.Sprintf("http://%s/version", config.ClashHost)
-	req, err := http.NewRequest("GET", endpoint, nil)
+	log.Println("starting collector:", "info")
+	for {
+		if err := scrapeVersion(config); err != nil {
+			return err
+		}
+		time.Sleep(30 * time.Second)
+	}
+}
+
+func scrapeVersion(config CollectConfig) error {
+	req, err := newAPIRequest(config, "/version")
 	if err != nil {
 		return err
 	}
-	if config.ClashToken != "" {
-		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", config.ClashToken))
-	}
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatal("version: failed to read response body: ", err)
-	}
-	if responseBody == nil {
-		return nil
-	}
-
-	var result versionMessage
-	err = json.Unmarshal(responseBody, &result)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return err
 	}
-
-	clashInfo.WithLabelValues(result.Version, fmt.Sprintf("%t", result.Premium)).Set(1)
-
+	if err := checkStatus(resp); err != nil {
+		return fmt.Errorf("%w: %s", err, body)
+	}
+	var result versionMessage
+	if err := json.Unmarshal(body, &result); err != nil {
+		return err
+	}
+	// Existing Grafana dashboards label this "premium". Mihomo reports meta=true and no premium flag.
+	premium := result.Premium || result.Meta
+	clashInfo.Reset()
+	clashInfo.WithLabelValues(result.Version, fmt.Sprintf("%t", premium)).Set(1)
 	return nil
 }
 
 func init() {
-	clashInfo = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "clash",
-			Name:      "info",
-			Help:      "Clash Infos",
-		},
-		[]string{"version", "premium"},
-	)
+	clashInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "clash",
+		Name:      "info",
+		Help:      "Core version. The premium label is true for Clash Premium and for Mihomo (meta).",
+	}, []string{"version", "premium"})
 	prometheus.MustRegister(clashInfo)
 	Register(new(Info))
 }

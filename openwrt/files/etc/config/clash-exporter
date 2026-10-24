@@ -1,0 +1,12 @@
+config clash-exporter 'main'
+	option enabled '1'
+	option listen '0.0.0.0:2112'
+	# 1: 自动读取 OpenClash 的 cn_port 和 dashboard_password，固定连接 127.0.0.1
+	option openclash_autoconf '1'
+	option clash_host '127.0.0.1'
+	option clash_port '9090'
+	option clash_token ''
+	# 按目的地拆流量会生成大量指标，路由器上默认关闭
+	option collect_dest '0'
+	# 当前 Mihomo 已去掉 /profile/tracing。打开后如果内核不支持，这个采集器会自己停掉
+	option collect_tracing '0'

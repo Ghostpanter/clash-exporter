@@ -1,0 +1,3 @@
+#!/bin/sh
+[ -x /etc/init.d/clash-exporter ] && /etc/init.d/clash-exporter enable
+exit 0
