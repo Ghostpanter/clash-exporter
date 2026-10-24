@@ -40,7 +40,12 @@ func (*Memory) Collect(config CollectConfig) error {
 		}
 		if first {
 			first = false
-			continue
+			// Mihomo forces the first sample to 0 so its own charts start at the
+			// origin, even when the process is already using memory. A core that
+			// does not do that (non-zero first sample) is recorded immediately.
+			if m.Inuse == 0 && m.OSLimit == 0 {
+				continue
+			}
 		}
 		clashMemory.WithLabelValues("inuse").Set(float64(m.Inuse))
 		clashMemory.WithLabelValues("oslimit").Set(float64(m.OSLimit))

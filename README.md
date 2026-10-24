@@ -8,9 +8,10 @@ Fork 自 [zxh326/clash-exporter](https://github.com/zxh326/clash-exporter)，按
 - 连接流量用 `int64`。原来的 `int` 在 32 位 OpenWrt 上会溢出。
 - `chains` 为空不再崩。策略标签取 Mihomo 的实际出口（`chains[0]`）。
 - 目的地优先用嗅探域名 `sniffHost`。
-- 计数器只加非负增量，核心重启把连接计数清掉时不会把 Counter 减成负数。
+- 计数器只加非负增量。同一条连接的字节变小（内核把这条连接的计数清掉）时不会把 Counter 减成负数。
+- 每次连上 `/connections` 的第一帧只做基线：当时已经在跑、而且之前没见过的连接，上面的历史字节不进 `clash_network_traffic_bytes_total`。否则 exporter 或内核一重启，Grafana 就会出现几 GB 的尖刺。之后新出现的连接从第一次看见开始计，只活了一帧的短连接也能算上；已经在跟踪的连接只加增量，websocket 断开期间涨上去的也算。看总流量用下面两个 Gauge。
 - WebSocket 用 `Authorization: Bearer`，密钥里有特殊字符也能过。
-- 新增 `clash_memory_bytes`、`clash_mode`。
+- 新增 `clash_memory_bytes`、`clash_mode`。Mihomo 会把 `/memory` 的第一帧强写成 0，好让它自己的图从原点画起；这个假 0 会丢掉，避免重连时内存曲线掉到 0。第一帧如果本来就不是 0，会照常记。
 - 当前 Mihomo 已经去掉 `/profile/tracing`。`-collectTracing` 打开后如果内核返回 404，这个采集器会自己停掉，不再把进程打死。
 - 路由器上默认**不**按目的地拆指标（`-collectDest` 默认 `false`）。
 - 新增 `clash_up`。内核停掉（比如 OpenClash 重启、更新规则）时 `clash_up` 变 0，`clash_mode`、`clash_info`、`clash_memory_bytes` 清空，`clash_active_connections` 归 0，不再一直报最后一次的旧值。
@@ -62,7 +63,7 @@ OpenClash 改了面板端口或密码之后，这个服务会跟着 reload（`pr
 | clash_mode | Gauge | mode |
 | clash_tracing_* | Histogram | 仅当内核还提供 /profile/tracing |
 
-`clash_network_traffic_bytes_total` 是按 Mihomo 每秒一次的连接快照算增量的：一条连接在两次快照之间结束，它最后不到 1 秒的流量就算不进去，下载很快的短连接会偏少。要看总流量用 `clash_download_bytes_total` / `clash_upload_bytes_total`（内核自己的累计值，内核重启后从 0 开始），按来源 / 策略拆分的这个只当比例参考。
+`clash_network_traffic_bytes_total` 是按 Mihomo 大约每秒一次的连接快照算增量的。连上之后的第一帧是基线，不计入历史流量。一条连接在两次快照之间结束，它最后不到 1 秒的流量就算不进去。要看总流量用 `clash_download_bytes_total` / `clash_upload_bytes_total`（内核自己的累计值，连上的当下就会写成控制器返回的绝对值，内核重启后从 0 开始）。按来源 / 策略拆分的 Counter 只当比例参考。
 
 Prometheus：
 

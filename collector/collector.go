@@ -23,6 +23,8 @@ func Register(c Collector) {
 	collectors = append(collectors, c)
 }
 
+var retryStep = 10 * time.Second
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -43,7 +45,7 @@ func Start(config CollectConfig) {
 						retryCount = 0
 					}
 					retryCount++
-					sleepDuration := time.Duration(min(retryCount*10, 60)) * time.Second
+					sleepDuration := time.Duration(min(retryCount, 6)) * retryStep
 					log.Println("collector:", c.Name(), "failed error:", err, "retry after", sleepDuration)
 					time.Sleep(sleepDuration)
 				} else {

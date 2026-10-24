@@ -69,6 +69,7 @@ func (c *Connection) Collect(config CollectConfig) error {
 	// Don't keep reporting the last snapshot while the core is down.
 	defer activeConnections.Set(0)
 
+	baseline := true
 	for {
 		var m connectionMessage
 		if err := wsjson.Read(ctx, conn, &m); err != nil {
@@ -79,14 +80,23 @@ func (c *Connection) Collect(config CollectConfig) error {
 		activeConnections.Set(float64(len(m.Connections)))
 
 		alive := make(map[string]struct{}, len(m.Connections))
+		// The first snapshot after each (re)connect is a baseline. Bytes already
+		// on those connections are not new traffic; counting them makes Grafana
+		// draw a multi-gigabyte spike every time the exporter or the core restarts.
+		// Connections that show up later are counted from the first time we see them,
+		// so a short flow that appears in only one snapshot is not dropped.
+		// Connections we were already tracking keep their delta, including bytes
+		// transferred while the websocket was down.
 		for _, connection := range m.Connections {
-			prev := c.connectionCache[connection.ID]
+			prev, seen := c.connectionCache[connection.ID]
 			policy := policyOf(connection.Chains)
 			destination := destinationOf(connection.Metadata, config.CollectDest)
-			networkTrafficTotal.WithLabelValues(connection.Metadata.SourceIP, destination, policy, "download").
-				Add(nonNegativeDelta(connection.Download, prev.Download))
-			networkTrafficTotal.WithLabelValues(connection.Metadata.SourceIP, destination, policy, "upload").
-				Add(nonNegativeDelta(connection.Upload, prev.Upload))
+			if !(baseline && !seen) {
+				networkTrafficTotal.WithLabelValues(connection.Metadata.SourceIP, destination, policy, "download").
+					Add(nonNegativeDelta(connection.Download, prev.Download))
+				networkTrafficTotal.WithLabelValues(connection.Metadata.SourceIP, destination, policy, "upload").
+					Add(nonNegativeDelta(connection.Upload, prev.Upload))
+			}
 			c.connectionCache[connection.ID] = connBytes{Upload: connection.Upload, Download: connection.Download}
 			alive[connection.ID] = struct{}{}
 		}
@@ -95,6 +105,7 @@ func (c *Connection) Collect(config CollectConfig) error {
 				delete(c.connectionCache, id)
 			}
 		}
+		baseline = false
 	}
 }
 

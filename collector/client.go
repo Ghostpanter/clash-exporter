@@ -28,10 +28,17 @@ func newAPIRequest(cfg CollectConfig, path string) (*http.Request, error) {
 	return req, nil
 }
 
+var dialTimeout = 5 * time.Second
+
 func dialWS(ctx context.Context, cfg CollectConfig, path string) (*websocket.Conn, *http.Response, error) {
 	header := http.Header{}
 	if cfg.ClashToken != "" {
 		header.Set("Authorization", "Bearer "+cfg.ClashToken)
+	}
+	if dialTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, dialTimeout)
+		defer cancel()
 	}
 	conn, resp, err := websocket.Dial(ctx, controllerURL(cfg, "ws", path), &websocket.DialOptions{
 		HTTPHeader: header,

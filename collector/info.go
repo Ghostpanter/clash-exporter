@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -17,6 +18,8 @@ var (
 	clashUp   prometheus.Gauge
 )
 
+var infoInterval = 30 * time.Second
+
 func (*Info) Name() string { return "info" }
 
 type versionMessage struct {
@@ -25,15 +28,42 @@ type versionMessage struct {
 	Meta    bool   `json:"meta"`
 }
 
+var (
+	infoMu           sync.Mutex
+	publishedVersion string
+	publishedPremium string
+)
+
+func publishInfo(version, premium string) {
+	infoMu.Lock()
+	defer infoMu.Unlock()
+	if publishedVersion == version && publishedPremium == premium {
+		clashInfo.WithLabelValues(version, premium).Set(1)
+		return
+	}
+	// Reset only when the labels change, so a scrape cannot observe the series missing
+	// on the steady-state poll.
+	clashInfo.Reset()
+	clashInfo.WithLabelValues(version, premium).Set(1)
+	publishedVersion, publishedPremium = version, premium
+}
+
+func clearInfo() {
+	infoMu.Lock()
+	defer infoMu.Unlock()
+	clashInfo.Reset()
+	publishedVersion, publishedPremium = "", ""
+	clashUp.Set(0)
+}
+
 func (*Info) Collect(config CollectConfig) error {
 	log.Println("starting collector:", "info")
 	for {
 		if err := scrapeVersion(config); err != nil {
-			clashInfo.Reset()
-			clashUp.Set(0)
+			clearInfo()
 			return err
 		}
-		time.Sleep(30 * time.Second)
+		time.Sleep(infoInterval)
 	}
 }
 
@@ -60,8 +90,7 @@ func scrapeVersion(config CollectConfig) error {
 	}
 	// Existing Grafana dashboards label this "premium". Mihomo reports meta=true and no premium flag.
 	premium := result.Premium || result.Meta
-	clashInfo.Reset()
-	clashInfo.WithLabelValues(result.Version, fmt.Sprintf("%t", premium)).Set(1)
+	publishInfo(result.Version, fmt.Sprintf("%t", premium))
 	clashUp.Set(1)
 	return nil
 }

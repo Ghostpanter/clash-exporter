@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -14,20 +15,46 @@ type Mode struct{}
 
 var clashMode *prometheus.GaugeVec
 
+var modeInterval = 15 * time.Second
+
 func (*Mode) Name() string { return "mode" }
 
 type configMessage struct {
 	Mode string `json:"mode"`
 }
 
+var (
+	modeMu        sync.Mutex
+	publishedMode string
+)
+
+func publishMode(mode string) {
+	modeMu.Lock()
+	defer modeMu.Unlock()
+	if publishedMode == mode {
+		clashMode.WithLabelValues(mode).Set(1)
+		return
+	}
+	clashMode.Reset()
+	clashMode.WithLabelValues(mode).Set(1)
+	publishedMode = mode
+}
+
+func clearMode() {
+	modeMu.Lock()
+	defer modeMu.Unlock()
+	clashMode.Reset()
+	publishedMode = ""
+}
+
 func (*Mode) Collect(config CollectConfig) error {
 	log.Println("starting collector:", "mode")
 	for {
 		if err := scrapeMode(config); err != nil {
-			clashMode.Reset()
+			clearMode()
 			return err
 		}
-		time.Sleep(15 * time.Second)
+		time.Sleep(modeInterval)
 	}
 }
 
@@ -55,8 +82,7 @@ func scrapeMode(config CollectConfig) error {
 	if result.Mode == "" {
 		return fmt.Errorf("controller /configs has empty mode")
 	}
-	clashMode.Reset()
-	clashMode.WithLabelValues(result.Mode).Set(1)
+	publishMode(result.Mode)
 	return nil
 }
 
