@@ -12,7 +12,10 @@ import (
 
 type Info struct{}
 
-var clashInfo *prometheus.GaugeVec
+var (
+	clashInfo *prometheus.GaugeVec
+	clashUp   prometheus.Gauge
+)
 
 func (*Info) Name() string { return "info" }
 
@@ -26,6 +29,8 @@ func (*Info) Collect(config CollectConfig) error {
 	log.Println("starting collector:", "info")
 	for {
 		if err := scrapeVersion(config); err != nil {
+			clashInfo.Reset()
+			clashUp.Set(0)
 			return err
 		}
 		time.Sleep(30 * time.Second)
@@ -57,6 +62,7 @@ func scrapeVersion(config CollectConfig) error {
 	premium := result.Premium || result.Meta
 	clashInfo.Reset()
 	clashInfo.WithLabelValues(result.Version, fmt.Sprintf("%t", premium)).Set(1)
+	clashUp.Set(1)
 	return nil
 }
 
@@ -66,6 +72,11 @@ func init() {
 		Name:      "info",
 		Help:      "Core version. The premium label is true for Clash Premium and for Mihomo (meta).",
 	}, []string{"version", "premium"})
-	prometheus.MustRegister(clashInfo)
+	clashUp = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "clash",
+		Name:      "up",
+		Help:      "1 if the last /version request to the external controller succeeded, 0 otherwise",
+	})
+	prometheus.MustRegister(clashInfo, clashUp)
 	Register(new(Info))
 }

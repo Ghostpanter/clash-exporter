@@ -35,7 +35,13 @@ func Start(config CollectConfig) {
 		go func(c Collector) {
 			retryCount := 0
 			for {
+				started := time.Now()
 				if err := c.Collect(config); err != nil {
+					// A collector that ran fine for a while (e.g. until OpenClash restarted the core)
+					// starts the backoff from scratch instead of waiting the maximum 60s forever.
+					if time.Since(started) > time.Minute {
+						retryCount = 0
+					}
 					retryCount++
 					sleepDuration := time.Duration(min(retryCount*10, 60)) * time.Second
 					log.Println("collector:", c.Name(), "failed error:", err, "retry after", sleepDuration)

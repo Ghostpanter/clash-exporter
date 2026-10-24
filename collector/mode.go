@@ -24,6 +24,7 @@ func (*Mode) Collect(config CollectConfig) error {
 	log.Println("starting collector:", "mode")
 	for {
 		if err := scrapeMode(config); err != nil {
+			clashMode.Reset()
 			return err
 		}
 		time.Sleep(15 * time.Second)

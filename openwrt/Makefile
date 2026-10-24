@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=clash-exporter
-PKG_VERSION:=0.2.0
+PKG_VERSION:=0.2.1
 PKG_RELEASE:=1
 
 PKG_LICENSE:=MIT
@@ -35,6 +35,10 @@ endef
 define Build/Prepare
 	mkdir -p $(PKG_BUILD_DIR)
 	$(CP) ./src/. $(PKG_BUILD_DIR)/
+endef
+
+define Package/clash-exporter/conffiles
+/etc/config/clash-exporter
 endef
 
 define Package/clash-exporter/install

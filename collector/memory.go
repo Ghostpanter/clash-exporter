@@ -29,6 +29,7 @@ func (*Memory) Collect(config CollectConfig) error {
 		return fmt.Errorf("dial /memory: %w", err)
 	}
 	defer conn.Close(websocket.StatusInternalError, "reconnect")
+	defer clashMemory.Reset()
 
 	// Mihomo writes a fake 0 as the first sample so charts start at the origin. Skip it.
 	first := true

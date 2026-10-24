@@ -13,6 +13,8 @@ Fork 自 [zxh326/clash-exporter](https://github.com/zxh326/clash-exporter)，按
 - 新增 `clash_memory_bytes`、`clash_mode`。
 - 当前 Mihomo 已经去掉 `/profile/tracing`。`-collectTracing` 打开后如果内核返回 404，这个采集器会自己停掉，不再把进程打死。
 - 路由器上默认**不**按目的地拆指标（`-collectDest` 默认 `false`）。
+- 新增 `clash_up`。内核停掉（比如 OpenClash 重启、更新规则）时 `clash_up` 变 0，`clash_mode`、`clash_info`、`clash_memory_bytes` 清空，`clash_active_connections` 归 0，不再一直报最后一次的旧值。
+- 采集器断开重连的等待时间在正常跑满 1 分钟后重新从 10 秒算起，不会在 OpenClash 重启几次之后一直卡在 60 秒。
 
 ## OpenWrt / OpenClash
 
@@ -50,6 +52,7 @@ OpenClash 改了面板端口或密码之后，这个服务会跟着 reload（`pr
 
 | 名字 | 类型 | 标签 |
 | --- | --- | --- |
+| clash_up | Gauge | |
 | clash_info | Gauge | version, premium |
 | clash_download_bytes_total | Gauge | |
 | clash_upload_bytes_total | Gauge | |
@@ -58,6 +61,8 @@ OpenClash 改了面板端口或密码之后，这个服务会跟着 reload（`pr
 | clash_memory_bytes | Gauge | type=inuse, oslimit |
 | clash_mode | Gauge | mode |
 | clash_tracing_* | Histogram | 仅当内核还提供 /profile/tracing |
+
+`clash_network_traffic_bytes_total` 是按 Mihomo 每秒一次的连接快照算增量的：一条连接在两次快照之间结束，它最后不到 1 秒的流量就算不进去，下载很快的短连接会偏少。要看总流量用 `clash_download_bytes_total` / `clash_upload_bytes_total`（内核自己的累计值，内核重启后从 0 开始），按来源 / 策略拆分的这个只当比例参考。
 
 Prometheus：
 

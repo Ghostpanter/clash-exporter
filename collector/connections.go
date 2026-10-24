@@ -66,6 +66,8 @@ func (c *Connection) Collect(config CollectConfig) error {
 		return fmt.Errorf("dial /connections: %w", err)
 	}
 	defer conn.Close(websocket.StatusInternalError, "reconnect")
+	// Don't keep reporting the last snapshot while the core is down.
+	defer activeConnections.Set(0)
 
 	for {
 		var m connectionMessage
